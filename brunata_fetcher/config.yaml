@@ -1,6 +1,6 @@
 name: "Brunata Fetcher"
 description: "Scrapes the Brunata Nutzerportal and publishes energy sensor data via MQTT Discovery."
-version: "0.1.0"
+version: "0.1.1"
 slug: "brunata_fetcher"
 url: "https://github.com/MtheK/brunata-fetcher-ha-addon"
 init: false
