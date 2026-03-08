@@ -2,27 +2,13 @@
 
 ## Unreleased
 
-- Test prerelease version on `next`: `0.1.6b9`
-- Change `energy_types` configuration to checkbox-style booleans
-- Enable all three energy types by default (`Heizung`, `Kaltwasser`, `Warmwasser`)
-- Keep backward compatibility for older list/string `energy_types` values
-- Move MQTT settings to nested `advanced` options section
-- Add configurable `scraper_url` in `advanced` options section
-- Add fallback handling for legacy flat MQTT options
-- Add Supervisor MQTT service discovery for automatic credentials/host fallback
-- Fix auto-discovery precedence by keeping default advanced MQTT host/port empty
-- Fix add-on options validation: keep `advanced.mqtt_port` as a valid port value
-- Wait for MQTT CONNACK before first publish to avoid startup race crashes
-- Guard publish path when MQTT client is disconnected
-- Start via `/usr/bin/with-contenv bashio` so `SUPERVISOR_TOKEN` is available at runtime
-- Fix MQTT `on_connect` callback success check for Paho `ReasonCode` objects
-- Add binary sensor for last portal-query success status
-- Send Home Assistant persistent notification when a portal query fails
-- Switch status sensor to `device_class: problem` (`ON` on failed query, `OFF` on success)
-- Treat portal query as successful only when at least one configured energy value
-	exists and `last_update_date` is plausible (`DD.MM.YYYY`)
-- Switch portal query problem icon dynamically:
-	`mdi:check-decagram-outline` when OK, `mdi:alert-decagram-outline` on failure
+## 0.2.0
+
+- Added Supervisor MQTT service discovery with fallback to manual/default settings
+- Moved MQTT and scraper URL settings into `advanced` options
+- Improved startup reliability by waiting for MQTT connection acknowledgment before publishing
+- Added portal query health monitoring via `binary_sensor` (`device_class: problem`)
+- Added persistent notification on failed portal queries
 
 ## 0.1.4
 
