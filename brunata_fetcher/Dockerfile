@@ -1,7 +1,7 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-# Install Python 3 and pip
+# Use Debian base for Playwright stability (glibc-based runtime).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     python3 \
@@ -12,7 +12,7 @@ RUN apt-get update \
 COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --break-system-packages --no-cache-dir -r /tmp/requirements.txt
 
-# Install Playwright browser and its system dependencies (needs glibc — Debian only)
+# Install Chromium and required system dependencies for Playwright.
 RUN playwright install chromium --with-deps
 
 # Copy add-on scripts
