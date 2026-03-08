@@ -8,6 +8,7 @@
 - Move MQTT settings to nested `advanced` options section
 - Add configurable `scraper_url` in `advanced` options section
 - Add fallback handling for legacy flat MQTT options
+- Add Supervisor MQTT service discovery for automatic credentials/host fallback
 
 ## 0.1.4
 

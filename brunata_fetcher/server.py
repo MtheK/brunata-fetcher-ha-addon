@@ -10,8 +10,11 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 import json
 import logging
+import os
 import sys
 import time
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 import paho.mqtt.client as mqtt
 
@@ -127,12 +130,10 @@ def _extract_advanced_options(options: dict) -> dict:
         advanced = {}
 
     # Keep compatibility with older flat option keys if they still exist.
-    mqtt_host = (
-        advanced.get("mqtt_host") or options.get("mqtt_host") or "core-mosquitto"
-    )
-    mqtt_port = int(advanced.get("mqtt_port") or options.get("mqtt_port") or 1883)
-    mqtt_user = advanced.get("mqtt_user") or options.get("mqtt_user") or ""
-    mqtt_password = advanced.get("mqtt_password") or options.get("mqtt_password") or ""
+    mqtt_host = advanced.get("mqtt_host") or options.get("mqtt_host")
+    mqtt_port = advanced.get("mqtt_port") or options.get("mqtt_port")
+    mqtt_user = advanced.get("mqtt_user") or options.get("mqtt_user")
+    mqtt_password = advanced.get("mqtt_password") or options.get("mqtt_password")
     scraper_url = advanced.get("scraper_url") or _DEFAULT_BRUNATA_LOGIN_URL
 
     return {
@@ -141,6 +142,73 @@ def _extract_advanced_options(options: dict) -> dict:
         "mqtt_user": mqtt_user,
         "mqtt_password": mqtt_password,
         "scraper_url": scraper_url,
+    }
+
+
+def _fetch_supervisor_mqtt_service() -> dict | None:
+    """Fetch MQTT service details from Supervisor API if available."""
+    token = os.environ.get("SUPERVISOR_TOKEN") or os.environ.get("HASSIO_TOKEN")
+    if not token:
+        _LOGGER.info("Supervisor token not available; skipping MQTT service discovery")
+        return None
+
+    req = urlrequest.Request(
+        "http://supervisor/services/mqtt",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as ex:
+        _LOGGER.warning("Supervisor MQTT service discovery failed: %s", ex)
+        return None
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        _LOGGER.warning("Supervisor MQTT service response missing data section")
+        return None
+
+    _LOGGER.info(
+        "Supervisor MQTT service discovered: host=%s port=%s user_set=%s",
+        data.get("host"),
+        data.get("port"),
+        bool(data.get("username") or data.get("user")),
+    )
+    return data
+
+
+def _resolve_mqtt_options(advanced: dict) -> dict:
+    """Resolve MQTT options with priority: manual > supervisor service > defaults."""
+    discovered = _fetch_supervisor_mqtt_service() or {}
+
+    host = advanced.get("mqtt_host") or discovered.get("host") or "core-mosquitto"
+    port_raw = advanced.get("mqtt_port") or discovered.get("port") or 1883
+    try:
+        port = int(port_raw)
+    except (TypeError, ValueError):
+        _LOGGER.warning("Invalid MQTT port '%s'; using default 1883", port_raw)
+        port = 1883
+
+    user = advanced.get("mqtt_user") or discovered.get("username") or discovered.get("user") or ""
+    password = (
+        advanced.get("mqtt_password")
+        or discovered.get("password")
+        or discovered.get("pass")
+        or ""
+    )
+
+    _LOGGER.info(
+        "Resolved MQTT settings: host=%s port=%s user_set=%s",
+        host,
+        port,
+        bool(user),
+    )
+
+    return {
+        "mqtt_host": host,
+        "mqtt_port": port,
+        "mqtt_user": user,
+        "mqtt_password": password,
     }
 
 
@@ -358,6 +426,7 @@ async def main() -> None:
     energy_types: list[str] = _normalize_energy_types(options.get("energy_types"))
     scan_interval: int = int(options.get("scan_interval_hours", 24)) * 3600
     advanced = _extract_advanced_options(options)
+    mqtt_options = _resolve_mqtt_options(advanced)
 
     _LOGGER.info(
         "Starting — energy_types=%s, interval=%dh",
@@ -366,10 +435,10 @@ async def main() -> None:
     )
 
     mqtt_client = _connect_mqtt(
-        advanced["mqtt_host"],
-        int(advanced["mqtt_port"]),
-        advanced["mqtt_user"],
-        advanced["mqtt_password"],
+        mqtt_options["mqtt_host"],
+        int(mqtt_options["mqtt_port"]),
+        mqtt_options["mqtt_user"],
+        mqtt_options["mqtt_password"],
     )
 
     _publish_discovery(mqtt_client, energy_types)

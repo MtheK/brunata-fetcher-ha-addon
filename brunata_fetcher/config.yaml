@@ -4,6 +4,9 @@ version: "0.1.5"
 slug: "brunata_fetcher"
 url: "https://github.com/MtheK/brunata-fetcher-ha-addon"
 init: false
+hassio_api: true
+services:
+  - "mqtt:want"
 arch:
   - amd64
   - aarch64
