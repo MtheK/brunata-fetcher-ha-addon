@@ -9,6 +9,7 @@
 - Add configurable `scraper_url` in `advanced` options section
 - Add fallback handling for legacy flat MQTT options
 - Add Supervisor MQTT service discovery for automatic credentials/host fallback
+- Fix auto-discovery precedence by keeping default advanced MQTT host/port empty
 
 ## 0.1.4
 

@@ -20,8 +20,8 @@ options:
     Warmwasser: true
   scan_interval_hours: 24
   advanced:
-    mqtt_host: "core-mosquitto"
-    mqtt_port: 1883
+    mqtt_host: ""
+    mqtt_port: null
     mqtt_user: ""
     mqtt_password: ""
     scraper_url: "https://nutzerportal.brunata-muenchen.de/np_anmeldung/index.html?sap-language=DE"

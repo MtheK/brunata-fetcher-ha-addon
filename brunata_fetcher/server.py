@@ -159,6 +159,18 @@ def _fetch_supervisor_mqtt_service() -> dict | None:
     try:
         with urlrequest.urlopen(req, timeout=10) as response:
             payload = json.loads(response.read().decode("utf-8"))
+    except urlerror.HTTPError as ex:
+        body = ""
+        try:
+            body = ex.read().decode("utf-8")
+        except (OSError, UnicodeDecodeError):  # pragma: no cover - defensive logging only
+            body = "<unavailable>"
+        _LOGGER.warning(
+            "Supervisor MQTT service discovery failed with HTTP %s: %s",
+            ex.code,
+            body,
+        )
+        return None
     except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as ex:
         _LOGGER.warning("Supervisor MQTT service discovery failed: %s", ex)
         return None
@@ -181,17 +193,22 @@ def _resolve_mqtt_options(advanced: dict) -> dict:
     """Resolve MQTT options with priority: manual > supervisor service > defaults."""
     discovered = _fetch_supervisor_mqtt_service() or {}
 
-    host = advanced.get("mqtt_host") or discovered.get("host") or "core-mosquitto"
-    port_raw = advanced.get("mqtt_port") or discovered.get("port") or 1883
+    manual_host = (advanced.get("mqtt_host") or "").strip()
+    manual_port = advanced.get("mqtt_port")
+    manual_user = advanced.get("mqtt_user") or ""
+    manual_password = advanced.get("mqtt_password") or ""
+
+    host = manual_host or discovered.get("host") or "core-mosquitto"
+    port_raw = manual_port if manual_port else discovered.get("port") or 1883
     try:
         port = int(port_raw)
     except (TypeError, ValueError):
         _LOGGER.warning("Invalid MQTT port '%s'; using default 1883", port_raw)
         port = 1883
 
-    user = advanced.get("mqtt_user") or discovered.get("username") or discovered.get("user") or ""
+    user = manual_user or discovered.get("username") or discovered.get("user") or ""
     password = (
-        advanced.get("mqtt_password")
+        manual_password
         or discovered.get("password")
         or discovered.get("pass")
         or ""
