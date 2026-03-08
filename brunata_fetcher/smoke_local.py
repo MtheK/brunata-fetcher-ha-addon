@@ -13,9 +13,10 @@ Run from this directory:
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 from _brunata_scraper import _parse_german_number
-from server import _publish_discovery, _publish_state
+from server import _publish_discovery, _publish_schedule_state, _publish_state
 
 
 class CapturingMqttClient:
@@ -58,15 +59,24 @@ def _assert_discovery_and_state() -> None:
         },
         energy_types,
     )
+    _publish_schedule_state(
+        client,
+        datetime(2026, 3, 1, 10, 0, tzinfo=UTC),
+        datetime(2026, 3, 2, 10, 0, tzinfo=UTC) + timedelta(minutes=1),
+    )
 
     topics = [topic for topic, _, _ in client.published]
     expected_topics = {
-        "homeassistant/sensor/brunata_fetcher_heizung/config",
-        "homeassistant/sensor/brunata_fetcher_kaltwasser/config",
-        "homeassistant/sensor/brunata_fetcher_last_update/config",
+        "homeassistant/sensor/brunata_fetcher/heizung/config",
+        "homeassistant/sensor/brunata_fetcher/kaltwasser/config",
+        "homeassistant/sensor/brunata_fetcher/last_update/config",
+        "homeassistant/sensor/brunata_fetcher/last_portal_query/config",
+        "homeassistant/sensor/brunata_fetcher/next_portal_query/config",
         "brunata_fetcher/sensor/heizung/state",
         "brunata_fetcher/sensor/kaltwasser/state",
         "brunata_fetcher/sensor/last_update/state",
+        "brunata_fetcher/sensor/last_portal_query/state",
+        "brunata_fetcher/sensor/next_portal_query/state",
     }
 
     missing = expected_topics - set(topics)
@@ -76,13 +86,28 @@ def _assert_discovery_and_state() -> None:
     discovery_payload = next(
         payload
         for topic, payload, _ in client.published
-        if topic == "homeassistant/sensor/brunata_fetcher_heizung/config"
+        if topic == "homeassistant/sensor/brunata_fetcher/heizung/config"
     )
     discovery = json.loads(discovery_payload)
     if discovery["state_topic"] != "brunata_fetcher/sensor/heizung/state":
         raise AssertionError("Unexpected state_topic in Heizung discovery payload")
     if discovery["unit_of_measurement"] != "kWh":
         raise AssertionError("Unexpected unit_of_measurement in Heizung payload")
+    if discovery["suggested_display_precision"] != 0:
+        raise AssertionError(
+            "Unexpected suggested_display_precision in Heizung payload"
+        )
+
+    cold_water_payload = next(
+        payload
+        for topic, payload, _ in client.published
+        if topic == "homeassistant/sensor/brunata_fetcher/kaltwasser/config"
+    )
+    cold_water_discovery = json.loads(cold_water_payload)
+    if cold_water_discovery["suggested_display_precision"] != 1:
+        raise AssertionError(
+            "Unexpected suggested_display_precision in Kaltwasser payload"
+        )
 
     if not all(retain for _, _, retain in client.published):
         raise AssertionError("All publish calls must be retained for this smoke test")

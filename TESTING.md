@@ -51,7 +51,7 @@ Start the add-on and check logs for:
 
 Verify discovery topics exist:
 
-- `homeassistant/sensor/brunata_fetcher_*/config`
+- `homeassistant/sensor/brunata_fetcher/*/config`
 
 Verify state topics are updated:
 
@@ -67,9 +67,14 @@ Expected sensor units:
 
 In Home Assistant, confirm:
 
-- Entities are created from MQTT Discovery
-- Values are populated after a scrape run
-- `Letztes Update` reflects the portal date
+- `Letzte Portal-Abfrage` is updated each run as timestamp
+- `Naechste Portal-Abfrage` shows the planned next run timestamp
+
+Display precision expectations:
+
+- `Heizung`: no decimal places
+- `Warmwasser`: no decimal places
+- `Kaltwasser`: one decimal place
 
 ## 5. Failure triage
 

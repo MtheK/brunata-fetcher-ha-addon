@@ -7,6 +7,7 @@ Nutzerportal via Playwright, and publishes results as MQTT Discovery sensors.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 import json
 import logging
 import sys
@@ -40,18 +41,21 @@ _ENERGY_TYPES: dict[str, dict] = {
         "label": "Heizung in kWh",
         "device_class": "energy",
         "state_class": "total_increasing",
+        "suggested_display_precision": 0,
     },
     "Kaltwasser": {
         "unit": "m³",
         "label": "Kaltwasser in m³",
         "device_class": "water",
         "state_class": "total_increasing",
+        "suggested_display_precision": 1,
     },
     "Warmwasser": {
         "unit": "kWh",
         "label": "Warmwasser in kWh",
         "device_class": "energy",
         "state_class": "total_increasing",
+        "suggested_display_precision": 0,
     },
 }
 
@@ -63,6 +67,7 @@ _DEVICE_INFO = {
 }
 
 _OPTIONS_FILE = "/data/options.json"
+_DISCOVERY_NODE = "brunata_fetcher"
 
 
 # --- MQTT helpers ------------------------------------------------------------
@@ -82,6 +87,11 @@ def _connect_mqtt(host: str, port: int, user: str, password: str) -> mqtt.Client
     return client
 
 
+def _discovery_topic(object_id: str) -> str:
+    """Build grouped MQTT discovery topic for this add-on."""
+    return f"homeassistant/sensor/{_DISCOVERY_NODE}/{object_id}/config"
+
+
 def _publish_discovery(client: mqtt.Client, energy_types: list[str]) -> None:
     """Publish retained MQTT Discovery config messages for all sensors."""
     _LOGGER.info("Discovery publish start: %d energy types", len(energy_types))
@@ -99,10 +109,11 @@ def _publish_discovery(client: mqtt.Client, energy_types: list[str]) -> None:
             "unit_of_measurement": cfg["unit"],
             "device_class": cfg["device_class"],
             "state_class": cfg["state_class"],
+            "suggested_display_precision": cfg["suggested_display_precision"],
             "device": _DEVICE_INFO,
         }
         client.publish(
-            f"homeassistant/sensor/brunata_fetcher_{slug}/config",
+            _discovery_topic(slug),
             json.dumps(payload),
             retain=True,
         )
@@ -110,7 +121,7 @@ def _publish_discovery(client: mqtt.Client, energy_types: list[str]) -> None:
 
     # Extra sensor: date of last portal update
     client.publish(
-        "homeassistant/sensor/brunata_fetcher_last_update/config",
+        _discovery_topic("last_update"),
         json.dumps(
             {
                 "name": "Letztes Update",
@@ -123,6 +134,38 @@ def _publish_discovery(client: mqtt.Client, energy_types: list[str]) -> None:
         retain=True,
     )
     _LOGGER.info("Published discovery config for Letztes Update")
+
+    client.publish(
+        _discovery_topic("last_portal_query"),
+        json.dumps(
+            {
+                "name": "Letzte Portal-Abfrage",
+                "unique_id": "brunata_fetcher_last_portal_query",
+                "state_topic": "brunata_fetcher/sensor/last_portal_query/state",
+                "device_class": "timestamp",
+                "icon": "mdi:clock-check-outline",
+                "device": _DEVICE_INFO,
+            }
+        ),
+        retain=True,
+    )
+    _LOGGER.info("Published discovery config for Letzte Portal-Abfrage")
+
+    client.publish(
+        _discovery_topic("next_portal_query"),
+        json.dumps(
+            {
+                "name": "Naechste Portal-Abfrage",
+                "unique_id": "brunata_fetcher_next_portal_query",
+                "state_topic": "brunata_fetcher/sensor/next_portal_query/state",
+                "device_class": "timestamp",
+                "icon": "mdi:clock-outline",
+                "device": _DEVICE_INFO,
+            }
+        ),
+        retain=True,
+    )
+    _LOGGER.info("Published discovery config for Naechste Portal-Abfrage")
     _LOGGER.info("Discovery publish done")
 
 
@@ -145,6 +188,27 @@ def _publish_state(client: mqtt.Client, data: dict, energy_types: list[str]) -> 
         )
         _LOGGER.info("State: last_update_date = %s", last_update)
     _LOGGER.info("State publish done")
+
+
+def _publish_schedule_state(
+    client: mqtt.Client, last_run: datetime, next_run: datetime
+) -> None:
+    """Publish timestamps for last and next planned portal query."""
+    last_iso = last_run.isoformat()
+    next_iso = next_run.isoformat()
+
+    client.publish(
+        "brunata_fetcher/sensor/last_portal_query/state",
+        last_iso,
+        retain=True,
+    )
+    client.publish(
+        "brunata_fetcher/sensor/next_portal_query/state",
+        next_iso,
+        retain=True,
+    )
+    _LOGGER.info("State: last_portal_query = %s", last_iso)
+    _LOGGER.info("State: next_portal_query = %s", next_iso)
 
 
 # --- Scraper -----------------------------------------------------------------
@@ -230,6 +294,7 @@ async def main() -> None:
     while True:
         cycle += 1
         cycle_start = time.monotonic()
+        run_started_at = datetime.now(UTC)
         _LOGGER.info("Cycle %d starting scrape", cycle)
         data = await _run_scrape(options)
         if data is not None:
@@ -241,6 +306,8 @@ async def main() -> None:
             )
 
         cycle_duration = time.monotonic() - cycle_start
+        next_run_at = datetime.now(UTC) + timedelta(seconds=scan_interval)
+        _publish_schedule_state(mqtt_client, run_started_at, next_run_at)
         _LOGGER.info("Cycle %d finished in %.2fs", cycle, cycle_duration)
         _LOGGER.info("Next scrape in %d seconds", scan_interval)
         await asyncio.sleep(scan_interval)
