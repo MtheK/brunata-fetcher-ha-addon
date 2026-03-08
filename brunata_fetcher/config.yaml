@@ -21,7 +21,7 @@ options:
   scan_interval_hours: 24
   advanced:
     mqtt_host: ""
-    mqtt_port: null
+    mqtt_port: 1883
     mqtt_user: ""
     mqtt_password: ""
     scraper_url: "https://nutzerportal.brunata-muenchen.de/np_anmeldung/index.html?sap-language=DE"
@@ -36,7 +36,7 @@ schema:
   scan_interval_hours: "int(1,168)"
   advanced:
     mqtt_host: "str?"
-    mqtt_port: "port?"
+    mqtt_port: "port"
     mqtt_user: "str?"
     mqtt_password: "password?"
     scraper_url: "url?"

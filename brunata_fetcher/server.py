@@ -199,7 +199,12 @@ def _resolve_mqtt_options(advanced: dict) -> dict:
     manual_password = advanced.get("mqtt_password") or ""
 
     host = manual_host or discovered.get("host") or "core-mosquitto"
-    port_raw = manual_port if manual_port else discovered.get("port") or 1883
+    if manual_host:
+        # If a manual host is configured, treat port as manual too.
+        port_raw = manual_port if manual_port else 1883
+    else:
+        # Keep service discovery effective when manual host is left empty.
+        port_raw = discovered.get("port") or manual_port or 1883
     try:
         port = int(port_raw)
     except (TypeError, ValueError):

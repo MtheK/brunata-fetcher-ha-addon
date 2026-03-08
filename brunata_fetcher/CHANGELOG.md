@@ -11,6 +11,7 @@
 - Add fallback handling for legacy flat MQTT options
 - Add Supervisor MQTT service discovery for automatic credentials/host fallback
 - Fix auto-discovery precedence by keeping default advanced MQTT host/port empty
+- Fix add-on options validation: keep `advanced.mqtt_port` as a valid port value
 
 ## 0.1.4
 
