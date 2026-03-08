@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Test prerelease version on `next`: `0.1.6b6`
+- Test prerelease version on `next`: `0.1.6b8`
 - Change `energy_types` configuration to checkbox-style booleans
 - Enable all three energy types by default (`Heizung`, `Kaltwasser`, `Warmwasser`)
 - Keep backward compatibility for older list/string `energy_types` values
@@ -18,6 +18,9 @@
 - Fix MQTT `on_connect` callback success check for Paho `ReasonCode` objects
 - Add binary sensor for last portal-query success status
 - Send Home Assistant persistent notification when a portal query fails
+- Switch status sensor to `device_class: problem` (`ON` on failed query, `OFF` on success)
+- Treat portal query as successful only when at least one configured energy value
+	exists and `last_update_date` is plausible (`DD.MM.YYYY`)
 
 ## 0.1.4
 

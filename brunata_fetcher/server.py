@@ -72,7 +72,11 @@ _DEVICE_INFO = {
 
 _OPTIONS_FILE = "/data/options.json"
 _DISCOVERY_NODE = "brunata_fetcher"
-_PORTAL_QUERY_SUCCESS_STATE_TOPIC = (
+_PORTAL_QUERY_PROBLEM_STATE_TOPIC = "brunata_fetcher/binary_sensor/portal_query_problem/state"
+_LEGACY_PORTAL_QUERY_SUCCESS_DISCOVERY_TOPIC = (
+    "homeassistant/binary_sensor/brunata_fetcher/last_portal_query_success/config"
+)
+_LEGACY_PORTAL_QUERY_SUCCESS_STATE_TOPIC = (
     "brunata_fetcher/binary_sensor/last_portal_query_success/state"
 )
 _PERSISTENT_NOTIFICATION_ID = "brunata_fetcher_portal_query_failed"
@@ -416,20 +420,25 @@ def _publish_discovery(client: mqtt.Client, energy_types: list[str]) -> None:
 
     _publish_mqtt(
         client,
-        f"homeassistant/binary_sensor/{_DISCOVERY_NODE}/last_portal_query_success/config",
+        f"homeassistant/binary_sensor/{_DISCOVERY_NODE}/portal_query_problem/config",
         json.dumps(
             {
-                "name": "Letzte Portal-Abfrage erfolgreich",
-                "unique_id": "brunata_fetcher_last_portal_query_success",
-                "state_topic": _PORTAL_QUERY_SUCCESS_STATE_TOPIC,
+                "name": "Portal-Abfrage Problem",
+                "unique_id": "brunata_fetcher_portal_query_problem",
+                "state_topic": _PORTAL_QUERY_PROBLEM_STATE_TOPIC,
+                "device_class": "problem",
                 "payload_on": "ON",
                 "payload_off": "OFF",
-                "icon": "mdi:check-decagram",
+                "icon": "mdi:alert-circle-outline",
                 "device": _DEVICE_INFO,
             }
         ),
     )
-    _LOGGER.info("Published discovery config for Portal-Abfrage erfolgreich")
+
+    # Remove legacy success-status entity to avoid duplicate/contradicting entities.
+    _publish_mqtt(client, _LEGACY_PORTAL_QUERY_SUCCESS_DISCOVERY_TOPIC, "")
+    _publish_mqtt(client, _LEGACY_PORTAL_QUERY_SUCCESS_STATE_TOPIC, "")
+    _LOGGER.info("Published discovery config for Portal-Abfrage Problem")
     _LOGGER.info("Discovery publish done")
 
 
@@ -465,11 +474,40 @@ def _publish_schedule_state(
     _LOGGER.info("State: next_portal_query = %s", next_iso)
 
 
-def _publish_last_query_success_state(client: mqtt.Client, successful: bool) -> None:
-    """Publish the success status of the latest portal query."""
-    state = "ON" if successful else "OFF"
-    _publish_mqtt(client, _PORTAL_QUERY_SUCCESS_STATE_TOPIC, state)
-    _LOGGER.info("State: last_portal_query_success = %s", state)
+def _validate_scrape_result(
+    data: dict, selected_energy_types: list[str]
+) -> tuple[bool, str]:
+    """Validate scrape payload before treating a cycle as successful."""
+    if not isinstance(data, dict):
+        return False, "result is not a dictionary"
+
+    has_energy_value = any(data.get(energy_type) is not None for energy_type in selected_energy_types)
+    if not has_energy_value:
+        return False, "no configured energy value present"
+
+    last_update_date = data.get("last_update_date")
+    if not isinstance(last_update_date, str) or not last_update_date.strip():
+        return False, "last_update_date missing"
+
+    try:
+        parsed_date = datetime.strptime(last_update_date.strip(), "%d.%m.%Y").date()
+    except ValueError:
+        return False, "last_update_date has invalid format (expected DD.MM.YYYY)"
+
+    today = datetime.now(UTC).date()
+    if parsed_date > today + timedelta(days=1):
+        return False, "last_update_date is implausibly in the future"
+    if parsed_date < datetime(2000, 1, 1).date():
+        return False, "last_update_date is implausibly old"
+
+    return True, "ok"
+
+
+def _publish_portal_query_problem_state(client: mqtt.Client, has_problem: bool) -> None:
+    """Publish whether the latest portal query has a problem."""
+    state = "ON" if has_problem else "OFF"
+    _publish_mqtt(client, _PORTAL_QUERY_PROBLEM_STATE_TOPIC, state)
+    _LOGGER.info("State: portal_query_problem = %s", state)
 
 
 def _send_failure_notification() -> bool:
@@ -608,13 +646,21 @@ async def main() -> None:
         run_started_at = datetime.now(UTC)
         _LOGGER.info("Cycle %d starting scrape", cycle)
         data = await _run_scrape(options, advanced["scraper_url"])
+        is_valid_result = False
         if data is not None:
+            is_valid_result, invalid_reason = _validate_scrape_result(data, energy_types)
+            if not is_valid_result:
+                _LOGGER.warning(
+                    "Cycle %d scrape result failed validation: %s", cycle, invalid_reason
+                )
+
+        if data is not None and is_valid_result:
             _publish_state(mqtt_client, data, energy_types)
-            _publish_last_query_success_state(mqtt_client, True)
+            _publish_portal_query_problem_state(mqtt_client, False)
             failure_notification_sent = False
             _LOGGER.info("Cycle %d scrape complete", cycle)
         else:
-            _publish_last_query_success_state(mqtt_client, False)
+            _publish_portal_query_problem_state(mqtt_client, True)
             if not failure_notification_sent:
                 notification_sent = await asyncio.to_thread(_send_failure_notification)
                 failure_notification_sent = notification_sent

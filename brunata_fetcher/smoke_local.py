@@ -18,10 +18,11 @@ from datetime import UTC, datetime, timedelta
 from _brunata_scraper import _parse_german_number
 from server import (
     _clear_removed_energy_type_entities,
-    _publish_last_query_success_state,
+    _publish_portal_query_problem_state,
     _publish_discovery,
     _publish_schedule_state,
     _publish_state,
+    _validate_scrape_result,
 )
 
 
@@ -86,7 +87,7 @@ def _assert_discovery_and_state() -> None:
         datetime(2026, 3, 1, 10, 0, tzinfo=UTC),
         datetime(2026, 3, 2, 10, 0, tzinfo=UTC) + timedelta(minutes=1),
     )
-    _publish_last_query_success_state(client, False)
+    _publish_portal_query_problem_state(client, True)
 
     topics = [topic for topic, _, _ in client.published]
     expected_topics = {
@@ -96,14 +97,14 @@ def _assert_discovery_and_state() -> None:
         "homeassistant/sensor/brunata_fetcher/last_update/config",
         "homeassistant/sensor/brunata_fetcher/last_portal_query/config",
         "homeassistant/sensor/brunata_fetcher/next_portal_query/config",
-        "homeassistant/binary_sensor/brunata_fetcher/last_portal_query_success/config",
+        "homeassistant/binary_sensor/brunata_fetcher/portal_query_problem/config",
         "brunata_fetcher/sensor/heizung/state",
         "brunata_fetcher/sensor/kaltwasser/state",
         "brunata_fetcher/sensor/warmwasser/state",
         "brunata_fetcher/sensor/last_update/state",
         "brunata_fetcher/sensor/last_portal_query/state",
         "brunata_fetcher/sensor/next_portal_query/state",
-        "brunata_fetcher/binary_sensor/last_portal_query_success/state",
+        "brunata_fetcher/binary_sensor/portal_query_problem/state",
     }
 
     missing = expected_topics - set(topics)
@@ -140,10 +141,46 @@ def _assert_discovery_and_state() -> None:
         raise AssertionError("All publish calls must be retained for this smoke test")
 
 
+def _assert_result_validation() -> None:
+    """Validate success/failure classification for scrape results."""
+    ok, reason = _validate_scrape_result(
+        {
+            "Heizung": 2150.0,
+            "Kaltwasser": None,
+            "last_update_date": "28.02.2026",
+        },
+        ["Heizung", "Kaltwasser"],
+    )
+    if not ok:
+        raise AssertionError(f"Expected valid result, got invalid: {reason}")
+
+    ok, _ = _validate_scrape_result(
+        {
+            "Heizung": None,
+            "Kaltwasser": None,
+            "last_update_date": "28.02.2026",
+        },
+        ["Heizung", "Kaltwasser"],
+    )
+    if ok:
+        raise AssertionError("Expected invalid result when no configured energy values exist")
+
+    ok, _ = _validate_scrape_result(
+        {
+            "Heizung": 10.0,
+            "last_update_date": "2099-02-28",
+        },
+        ["Heizung"],
+    )
+    if ok:
+        raise AssertionError("Expected invalid result for malformed last_update_date")
+
+
 def main() -> None:
     """Run local smoke checks and print a short result."""
     _assert_parser()
     _assert_discovery_and_state()
+    _assert_result_validation()
     print("Smoke test passed: parser and MQTT payload generation look good")
 
 
