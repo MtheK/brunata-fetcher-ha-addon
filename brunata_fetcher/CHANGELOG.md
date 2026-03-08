@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Test prerelease version on `next`: `0.1.6b2`
+- Test prerelease version on `next`: `0.1.6b3`
 - Change `energy_types` configuration to checkbox-style booleans
 - Enable all three energy types by default (`Heizung`, `Kaltwasser`, `Warmwasser`)
 - Keep backward compatibility for older list/string `energy_types` values
@@ -12,6 +12,8 @@
 - Add Supervisor MQTT service discovery for automatic credentials/host fallback
 - Fix auto-discovery precedence by keeping default advanced MQTT host/port empty
 - Fix add-on options validation: keep `advanced.mqtt_port` as a valid port value
+- Wait for MQTT CONNACK before first publish to avoid startup race crashes
+- Guard publish path when MQTT client is disconnected
 
 ## 0.1.4
 

@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from urllib import error as urlerror
 from urllib import request as urlrequest
@@ -82,10 +83,29 @@ def _connect_mqtt(host: str, port: int, user: str, password: str) -> mqtt.Client
         "MQTT connect start: host=%s port=%s user_set=%s", host, port, bool(user)
     )
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="brunata_fetcher")
+    connected = threading.Event()
+
+    def _on_connect(
+        _client: mqtt.Client,
+        _userdata: object,
+        _flags: mqtt.ConnectFlags,
+        reason_code: mqtt.ReasonCode,
+        _properties: mqtt.Properties | None = None,
+    ) -> None:
+        if int(reason_code) == 0:
+            connected.set()
+            _LOGGER.info("MQTT broker connection acknowledged")
+            return
+        _LOGGER.error("MQTT connect rejected: rc=%s", reason_code)
+
+    client.on_connect = _on_connect
     if user:
         client.username_pw_set(user, password)
     client.connect(host, port, keepalive=60)
     client.loop_start()
+    if not connected.wait(timeout=10):
+        client.loop_stop()
+        raise RuntimeError("MQTT connect timeout waiting for CONNACK")
     _LOGGER.info("MQTT connect done")
     return client
 
@@ -99,8 +119,20 @@ def _publish_mqtt(
     qos: int = 1,
 ) -> None:
     """Publish MQTT message and wait for broker acknowledgment."""
+    is_connected_fn = getattr(client, "is_connected", None)
+    if callable(is_connected_fn) and not is_connected_fn():
+        _LOGGER.warning("MQTT publish skipped while disconnected: topic=%s", topic)
+        return
+
     info = client.publish(topic, payload, qos=qos, retain=retain)
-    info.wait_for_publish()
+    try:
+        try:
+            info.wait_for_publish(timeout=10)
+        except TypeError:
+            info.wait_for_publish()
+    except RuntimeError as ex:
+        _LOGGER.error("MQTT publish runtime failure: topic=%s err=%s", topic, ex)
+        return
     if info.rc != mqtt.MQTT_ERR_SUCCESS:
         _LOGGER.error(
             "MQTT publish failed: topic=%s rc=%s retain=%s qos=%s",
