@@ -92,7 +92,13 @@ def _connect_mqtt(host: str, port: int, user: str, password: str) -> mqtt.Client
         reason_code: mqtt.ReasonCode,
         _properties: mqtt.Properties | None = None,
     ) -> None:
-        if int(reason_code) == 0:
+        if hasattr(reason_code, "is_failure"):
+            is_success = not bool(reason_code.is_failure)
+        else:
+            reason_value = getattr(reason_code, "value", reason_code)
+            is_success = reason_value == 0
+
+        if is_success:
             connected.set()
             _LOGGER.info("MQTT broker connection acknowledged")
             return

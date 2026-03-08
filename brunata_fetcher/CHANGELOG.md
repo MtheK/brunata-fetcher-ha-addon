@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Test prerelease version on `next`: `0.1.6b4`
+- Test prerelease version on `next`: `0.1.6b5`
 - Change `energy_types` configuration to checkbox-style booleans
 - Enable all three energy types by default (`Heizung`, `Kaltwasser`, `Warmwasser`)
 - Keep backward compatibility for older list/string `energy_types` values
@@ -15,6 +15,7 @@
 - Wait for MQTT CONNACK before first publish to avoid startup race crashes
 - Guard publish path when MQTT client is disconnected
 - Start via `/usr/bin/with-contenv bashio` so `SUPERVISOR_TOKEN` is available at runtime
+- Fix MQTT `on_connect` callback success check for Paho `ReasonCode` objects
 
 ## 0.1.4
 
