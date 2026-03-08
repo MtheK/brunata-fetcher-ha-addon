@@ -10,8 +10,12 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 import json
 import logging
+import os
 import sys
+import threading
 import time
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 import paho.mqtt.client as mqtt
 
@@ -26,7 +30,7 @@ _LOGGER = logging.getLogger("brunata_fetcher")
 
 # --- Brunata portal constants ------------------------------------------------
 
-_BRUNATA_LOGIN_URL = (
+_DEFAULT_BRUNATA_LOGIN_URL = (
     "https://nutzerportal.brunata-muenchen.de/np_anmeldung/index.html?sap-language=DE"
 )
 _SELECTOR_EMAIL = "#__component0---Start--idEmailInput-inner"
@@ -68,6 +72,19 @@ _DEVICE_INFO = {
 
 _OPTIONS_FILE = "/data/options.json"
 _DISCOVERY_NODE = "brunata_fetcher"
+_PORTAL_QUERY_PROBLEM_STATE_TOPIC = "brunata_fetcher/binary_sensor/portal_query_problem/state"
+_PORTAL_QUERY_PROBLEM_DISCOVERY_TOPIC = (
+    "homeassistant/binary_sensor/brunata_fetcher/portal_query_problem/config"
+)
+_PORTAL_QUERY_ICON_OK = "mdi:check-decagram-outline"
+_PORTAL_QUERY_ICON_PROBLEM = "mdi:alert-decagram-outline"
+_LEGACY_PORTAL_QUERY_SUCCESS_DISCOVERY_TOPIC = (
+    "homeassistant/binary_sensor/brunata_fetcher/last_portal_query_success/config"
+)
+_LEGACY_PORTAL_QUERY_SUCCESS_STATE_TOPIC = (
+    "brunata_fetcher/binary_sensor/last_portal_query_success/state"
+)
+_PERSISTENT_NOTIFICATION_ID = "brunata_fetcher_portal_query_failed"
 
 
 # --- MQTT helpers ------------------------------------------------------------
@@ -79,10 +96,35 @@ def _connect_mqtt(host: str, port: int, user: str, password: str) -> mqtt.Client
         "MQTT connect start: host=%s port=%s user_set=%s", host, port, bool(user)
     )
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="brunata_fetcher")
+    connected = threading.Event()
+
+    def _on_connect(
+        _client: mqtt.Client,
+        _userdata: object,
+        _flags: mqtt.ConnectFlags,
+        reason_code: mqtt.ReasonCode,
+        _properties: mqtt.Properties | None = None,
+    ) -> None:
+        if hasattr(reason_code, "is_failure"):
+            is_success = not bool(reason_code.is_failure)
+        else:
+            reason_value = getattr(reason_code, "value", reason_code)
+            is_success = reason_value == 0
+
+        if is_success:
+            connected.set()
+            _LOGGER.info("MQTT broker connection acknowledged")
+            return
+        _LOGGER.error("MQTT connect rejected: rc=%s", reason_code)
+
+    client.on_connect = _on_connect
     if user:
         client.username_pw_set(user, password)
     client.connect(host, port, keepalive=60)
     client.loop_start()
+    if not connected.wait(timeout=10):
+        client.loop_stop()
+        raise RuntimeError("MQTT connect timeout waiting for CONNACK")
     _LOGGER.info("MQTT connect done")
     return client
 
@@ -96,8 +138,20 @@ def _publish_mqtt(
     qos: int = 1,
 ) -> None:
     """Publish MQTT message and wait for broker acknowledgment."""
+    is_connected_fn = getattr(client, "is_connected", None)
+    if callable(is_connected_fn) and not is_connected_fn():
+        _LOGGER.warning("MQTT publish skipped while disconnected: topic=%s", topic)
+        return
+
     info = client.publish(topic, payload, qos=qos, retain=retain)
-    info.wait_for_publish()
+    try:
+        try:
+            info.wait_for_publish(timeout=10)
+        except TypeError:
+            info.wait_for_publish()
+    except RuntimeError as ex:
+        _LOGGER.error("MQTT publish runtime failure: topic=%s err=%s", topic, ex)
+        return
     if info.rc != mqtt.MQTT_ERR_SUCCESS:
         _LOGGER.error(
             "MQTT publish failed: topic=%s rc=%s retain=%s qos=%s",
@@ -120,10 +174,156 @@ def _discovery_topic(object_id: str) -> str:
     return f"homeassistant/sensor/{_DISCOVERY_NODE}/{object_id}/config"
 
 
-def _normalize_energy_types(configured: list[str] | str | None) -> list[str]:
+def _extract_advanced_options(options: dict) -> dict:
+    """Extract advanced options with fallback defaults and legacy compatibility."""
+    advanced = options.get("advanced")
+    if not isinstance(advanced, dict):
+        advanced = {}
+
+    # Keep compatibility with older flat option keys if they still exist.
+    mqtt_host = advanced.get("mqtt_host") or options.get("mqtt_host")
+    mqtt_port = advanced.get("mqtt_port") or options.get("mqtt_port")
+    mqtt_user = advanced.get("mqtt_user") or options.get("mqtt_user")
+    mqtt_password = advanced.get("mqtt_password") or options.get("mqtt_password")
+    scraper_url = advanced.get("scraper_url") or _DEFAULT_BRUNATA_LOGIN_URL
+
+    return {
+        "mqtt_host": mqtt_host,
+        "mqtt_port": mqtt_port,
+        "mqtt_user": mqtt_user,
+        "mqtt_password": mqtt_password,
+        "scraper_url": scraper_url,
+    }
+
+
+def _get_supervisor_token() -> str | None:
+    """Return supervisor token from environment or s6 container env files."""
+    token = os.environ.get("SUPERVISOR_TOKEN") or os.environ.get("HASSIO_TOKEN")
+    if token:
+        return token
+
+    for token_file in (
+        "/run/s6/container_environment/SUPERVISOR_TOKEN",
+        "/run/s6/container_environment/HASSIO_TOKEN",
+    ):
+        try:
+            with open(token_file, encoding="utf-8") as file_handle:
+                token = file_handle.read().strip()
+        except OSError:
+            continue
+        if token:
+            _LOGGER.info("Loaded supervisor token from container environment file")
+            return token
+
+    return None
+
+
+def _fetch_supervisor_mqtt_service() -> dict | None:
+    """Fetch MQTT service details from Supervisor API if available."""
+    token = _get_supervisor_token()
+    if not token:
+        _LOGGER.info("Supervisor token not available; skipping MQTT service discovery")
+        return None
+
+    req = urlrequest.Request(
+        "http://supervisor/services/mqtt",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urlerror.HTTPError as ex:
+        body = ""
+        try:
+            body = ex.read().decode("utf-8")
+        except (OSError, UnicodeDecodeError):  # pragma: no cover - defensive logging only
+            body = "<unavailable>"
+        _LOGGER.warning(
+            "Supervisor MQTT service discovery failed with HTTP %s: %s",
+            ex.code,
+            body,
+        )
+        return None
+    except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as ex:
+        _LOGGER.warning("Supervisor MQTT service discovery failed: %s", ex)
+        return None
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        _LOGGER.warning("Supervisor MQTT service response missing data section")
+        return None
+
+    _LOGGER.info(
+        "Supervisor MQTT service discovered: host=%s port=%s user_set=%s",
+        data.get("host"),
+        data.get("port"),
+        bool(data.get("username") or data.get("user")),
+    )
+    return data
+
+
+def _resolve_mqtt_options(advanced: dict) -> dict:
+    """Resolve MQTT options with priority: manual > supervisor service > defaults."""
+    discovered = _fetch_supervisor_mqtt_service() or {}
+
+    manual_host = (advanced.get("mqtt_host") or "").strip()
+    manual_port = advanced.get("mqtt_port")
+    manual_user = advanced.get("mqtt_user") or ""
+    manual_password = advanced.get("mqtt_password") or ""
+
+    host = manual_host or discovered.get("host") or "core-mosquitto"
+    if manual_host:
+        # If a manual host is configured, treat port as manual too.
+        port_raw = manual_port if manual_port else 1883
+    else:
+        # Keep service discovery effective when manual host is left empty.
+        port_raw = discovered.get("port") or manual_port or 1883
+    try:
+        port = int(port_raw)
+    except (TypeError, ValueError):
+        _LOGGER.warning("Invalid MQTT port '%s'; using default 1883", port_raw)
+        port = 1883
+
+    user = manual_user or discovered.get("username") or discovered.get("user") or ""
+    password = (
+        manual_password
+        or discovered.get("password")
+        or discovered.get("pass")
+        or ""
+    )
+
+    _LOGGER.info(
+        "Resolved MQTT settings: host=%s port=%s user_set=%s",
+        host,
+        port,
+        bool(user),
+    )
+
+    return {
+        "mqtt_host": host,
+        "mqtt_port": port,
+        "mqtt_user": user,
+        "mqtt_password": password,
+    }
+
+
+def _normalize_energy_types(
+    configured: dict[str, bool] | list[str] | str | None,
+) -> list[str]:
     """Return known energy types in canonical order without duplicates."""
     if configured is None:
         configured = []
+
+    if isinstance(configured, dict):
+        normalized = [
+            energy_type
+            for energy_type in _ENERGY_TYPES
+            if bool(configured.get(energy_type, False))
+        ]
+        if not normalized:
+            return list(_ENERGY_TYPES)
+        return normalized
+
     if isinstance(configured, str):
         configured = [configured]
 
@@ -222,6 +422,13 @@ def _publish_discovery(client: mqtt.Client, energy_types: list[str]) -> None:
         ),
     )
     _LOGGER.info("Published discovery config for Naechste Portal-Abfrage")
+
+    _publish_portal_query_problem_discovery(client, _PORTAL_QUERY_ICON_OK)
+
+    # Remove legacy success-status entity to avoid duplicate/contradicting entities.
+    _publish_mqtt(client, _LEGACY_PORTAL_QUERY_SUCCESS_DISCOVERY_TOPIC, "")
+    _publish_mqtt(client, _LEGACY_PORTAL_QUERY_SUCCESS_STATE_TOPIC, "")
+    _LOGGER.info("Published discovery config for Portal-Abfrage Problem")
     _LOGGER.info("Discovery publish done")
 
 
@@ -257,10 +464,112 @@ def _publish_schedule_state(
     _LOGGER.info("State: next_portal_query = %s", next_iso)
 
 
+def _validate_scrape_result(
+    data: dict, selected_energy_types: list[str]
+) -> tuple[bool, str]:
+    """Validate scrape payload before treating a cycle as successful."""
+    if not isinstance(data, dict):
+        return False, "result is not a dictionary"
+
+    has_energy_value = any(data.get(energy_type) is not None for energy_type in selected_energy_types)
+    if not has_energy_value:
+        return False, "no configured energy value present"
+
+    last_update_date = data.get("last_update_date")
+    if not isinstance(last_update_date, str) or not last_update_date.strip():
+        return False, "last_update_date missing"
+
+    try:
+        parsed_date = datetime.strptime(last_update_date.strip(), "%d.%m.%Y").date()
+    except ValueError:
+        return False, "last_update_date has invalid format (expected DD.MM.YYYY)"
+
+    today = datetime.now(UTC).date()
+    if parsed_date > today + timedelta(days=1):
+        return False, "last_update_date is implausibly in the future"
+    if parsed_date < datetime(2000, 1, 1).date():
+        return False, "last_update_date is implausibly old"
+
+    return True, "ok"
+
+
+def _publish_portal_query_problem_state(client: mqtt.Client, has_problem: bool) -> None:
+    """Publish whether the latest portal query has a problem."""
+    state = "ON" if has_problem else "OFF"
+    _publish_mqtt(client, _PORTAL_QUERY_PROBLEM_STATE_TOPIC, state)
+    _LOGGER.info("State: portal_query_problem = %s", state)
+
+
+def _publish_portal_query_problem_discovery(client: mqtt.Client, icon: str) -> None:
+    """Publish discovery payload for the portal query problem entity."""
+    _publish_mqtt(
+        client,
+        _PORTAL_QUERY_PROBLEM_DISCOVERY_TOPIC,
+        json.dumps(
+            {
+                "name": "Portal-Abfrage Problem",
+                "unique_id": "brunata_fetcher_portal_query_problem",
+                "state_topic": _PORTAL_QUERY_PROBLEM_STATE_TOPIC,
+                "device_class": "problem",
+                "payload_on": "ON",
+                "payload_off": "OFF",
+                "icon": icon,
+                "device": _DEVICE_INFO,
+            }
+        ),
+    )
+
+
+def _send_failure_notification() -> bool:
+    """Send persistent notification in Home Assistant when portal query fails."""
+    token = _get_supervisor_token()
+    if not token:
+        _LOGGER.warning("Cannot send notification: supervisor token unavailable")
+        return False
+
+    payload = {
+        "title": "Brunata Fetcher",
+        "message": (
+            "Die letzte Portal-Abfrage war nicht erfolgreich. "
+            "Bitte pruefe die Add-on-Logs."
+        ),
+        "notification_id": _PERSISTENT_NOTIFICATION_ID,
+    }
+
+    request = urlrequest.Request(
+        "http://supervisor/core/api/services/persistent_notification/create",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(request, timeout=10) as response:
+            response.read()
+    except urlerror.HTTPError as ex:
+        body = ""
+        try:
+            body = ex.read().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            body = "<unavailable>"
+        _LOGGER.warning(
+            "Failed to send persistent notification (HTTP %s): %s", ex.code, body
+        )
+        return False
+    except (urlerror.URLError, TimeoutError) as ex:
+        _LOGGER.warning("Failed to send persistent notification: %s", ex)
+        return False
+
+    _LOGGER.info("Sent persistent notification for failed portal query")
+    return True
+
+
 # --- Scraper -----------------------------------------------------------------
 
 
-async def _run_scrape(options: dict) -> dict | None:
+async def _run_scrape(options: dict, scraper_url: str) -> dict | None:
     """Build scraper config from add-on options and call the scraper."""
     start = time.monotonic()
     _LOGGER.info("Scrape run config build start")
@@ -268,7 +577,7 @@ async def _run_scrape(options: dict) -> dict | None:
         "email": options["email"],
         "password": options["password"],
         "energy_types": _normalize_energy_types(options.get("energy_types")),
-        "login_url": _BRUNATA_LOGIN_URL,
+        "login_url": scraper_url,
         "selector_email": _SELECTOR_EMAIL,
         "selector_password": _SELECTOR_PASSWORD,
         "selector_login_button": _SELECTOR_LOGIN_BUTTON,
@@ -320,6 +629,8 @@ async def main() -> None:
 
     energy_types: list[str] = _normalize_energy_types(options.get("energy_types"))
     scan_interval: int = int(options.get("scan_interval_hours", 24)) * 3600
+    advanced = _extract_advanced_options(options)
+    mqtt_options = _resolve_mqtt_options(advanced)
 
     _LOGGER.info(
         "Starting — energy_types=%s, interval=%dh",
@@ -328,26 +639,52 @@ async def main() -> None:
     )
 
     mqtt_client = _connect_mqtt(
-        options["mqtt_host"],
-        int(options["mqtt_port"]),
-        options.get("mqtt_user", ""),
-        options.get("mqtt_password", ""),
+        mqtt_options["mqtt_host"],
+        int(mqtt_options["mqtt_port"]),
+        mqtt_options["mqtt_user"],
+        mqtt_options["mqtt_password"],
     )
 
     _publish_discovery(mqtt_client, energy_types)
     _clear_removed_energy_type_entities(mqtt_client, energy_types)
 
     cycle = 0
+    failure_notification_sent = False
+    portal_query_problem_icon: str | None = None
     while True:
         cycle += 1
         cycle_start = time.monotonic()
         run_started_at = datetime.now(UTC)
         _LOGGER.info("Cycle %d starting scrape", cycle)
-        data = await _run_scrape(options)
+        data = await _run_scrape(options, advanced["scraper_url"])
+        is_valid_result = False
         if data is not None:
+            is_valid_result, invalid_reason = _validate_scrape_result(data, energy_types)
+            if not is_valid_result:
+                _LOGGER.warning(
+                    "Cycle %d scrape result failed validation: %s", cycle, invalid_reason
+                )
+
+        if data is not None and is_valid_result:
             _publish_state(mqtt_client, data, energy_types)
+            _publish_portal_query_problem_state(mqtt_client, False)
+            if portal_query_problem_icon != _PORTAL_QUERY_ICON_OK:
+                _publish_portal_query_problem_discovery(
+                    mqtt_client, _PORTAL_QUERY_ICON_OK
+                )
+                portal_query_problem_icon = _PORTAL_QUERY_ICON_OK
+            failure_notification_sent = False
             _LOGGER.info("Cycle %d scrape complete", cycle)
         else:
+            _publish_portal_query_problem_state(mqtt_client, True)
+            if portal_query_problem_icon != _PORTAL_QUERY_ICON_PROBLEM:
+                _publish_portal_query_problem_discovery(
+                    mqtt_client, _PORTAL_QUERY_ICON_PROBLEM
+                )
+                portal_query_problem_icon = _PORTAL_QUERY_ICON_PROBLEM
+            if not failure_notification_sent:
+                notification_sent = await asyncio.to_thread(_send_failure_notification)
+                failure_notification_sent = notification_sent
             _LOGGER.warning(
                 "Cycle %d scrape returned no data — will retry after interval", cycle
             )

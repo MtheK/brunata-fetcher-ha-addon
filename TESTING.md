@@ -35,7 +35,7 @@ Configure add-on options in Home Assistant:
 
 - `email`: Brunata portal email
 - `password`: Brunata portal password
-- `energy_types`: for example `Heizung`, `Kaltwasser`, `Warmwasser`
+- `energy_types`: select with checkboxes (`Heizung`, `Kaltwasser`, `Warmwasser`)
 - `mqtt_host`: usually `core-mosquitto`
 - `mqtt_port`: usually `1883`
 - `mqtt_user`, `mqtt_password`: your broker credentials

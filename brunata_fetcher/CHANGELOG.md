@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+## 0.2.0
+
+- Added Supervisor MQTT service discovery with fallback to manual/default settings
+- Moved MQTT and scraper URL settings into `advanced` options
+- Improved startup reliability by waiting for MQTT connection acknowledgment before publishing
+- Added portal query health monitoring via `binary_sensor` (`device_class: problem`)
+- Added persistent notification on failed portal queries
+
 ## 0.1.4
 
 - Set all known `energy_types` as default (`Heizung`, `Kaltwasser`, `Warmwasser`)
