@@ -1,0 +1,31 @@
+name: "Brunata Fetcher"
+description: "Scrapes the Brunata Nutzerportal and publishes energy sensor data via MQTT Discovery."
+version: "0.1.0"
+slug: "brunata_fetcher"
+url: "https://github.com/MtheK/brunata-fetcher-ha-addon"
+init: false
+arch:
+  - amd64
+  - aarch64
+
+options:
+  email: ""
+  password: ""
+  energy_types:
+    - "Heizung"
+  mqtt_host: "core-mosquitto"
+  mqtt_port: 1883
+  mqtt_user: ""
+  mqtt_password: ""
+  scan_interval_hours: 24
+
+schema:
+  email: str
+  password: str
+  energy_types:
+    - str
+  mqtt_host: str
+  mqtt_port: int
+  mqtt_user: str
+  mqtt_password: str
+  scan_interval_hours: int
