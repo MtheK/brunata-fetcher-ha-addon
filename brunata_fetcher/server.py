@@ -87,9 +87,65 @@ def _connect_mqtt(host: str, port: int, user: str, password: str) -> mqtt.Client
     return client
 
 
+def _publish_mqtt(
+    client: mqtt.Client,
+    topic: str,
+    payload: str,
+    *,
+    retain: bool = True,
+    qos: int = 1,
+) -> None:
+    """Publish MQTT message and wait for broker acknowledgment."""
+    info = client.publish(topic, payload, qos=qos, retain=retain)
+    info.wait_for_publish()
+    if info.rc != mqtt.MQTT_ERR_SUCCESS:
+        _LOGGER.error(
+            "MQTT publish failed: topic=%s rc=%s retain=%s qos=%s",
+            topic,
+            info.rc,
+            retain,
+            qos,
+        )
+        return
+    _LOGGER.debug(
+        "MQTT publish ack: topic=%s retain=%s qos=%s",
+        topic,
+        retain,
+        qos,
+    )
+
+
 def _discovery_topic(object_id: str) -> str:
     """Build grouped MQTT discovery topic for this add-on."""
     return f"homeassistant/sensor/{_DISCOVERY_NODE}/{object_id}/config"
+
+
+def _normalize_energy_types(configured: list[str] | str | None) -> list[str]:
+    """Return known energy types in canonical order without duplicates."""
+    if configured is None:
+        configured = []
+    if isinstance(configured, str):
+        configured = [configured]
+
+    selected = set(configured)
+    normalized = [
+        energy_type for energy_type in _ENERGY_TYPES if energy_type in selected
+    ]
+    if not normalized:
+        return list(_ENERGY_TYPES)
+    return normalized
+
+
+def _clear_removed_energy_type_entities(
+    client: mqtt.Client, selected_energy_types: list[str]
+) -> None:
+    """Remove HA entities for disabled energy types via retained empty payloads."""
+    disabled = set(_ENERGY_TYPES).difference(selected_energy_types)
+    for energy_type in disabled:
+        slug = energy_type.lower().replace(" ", "_")
+        _publish_mqtt(client, _discovery_topic(slug), "")
+        _publish_mqtt(client, f"brunata_fetcher/sensor/{slug}/state", "")
+        _LOGGER.info("Removed disabled energy type entity: %s", energy_type)
 
 
 def _publish_discovery(client: mqtt.Client, energy_types: list[str]) -> None:
@@ -112,15 +168,16 @@ def _publish_discovery(client: mqtt.Client, energy_types: list[str]) -> None:
             "suggested_display_precision": cfg["suggested_display_precision"],
             "device": _DEVICE_INFO,
         }
-        client.publish(
+        _publish_mqtt(
+            client,
             _discovery_topic(slug),
             json.dumps(payload),
-            retain=True,
         )
         _LOGGER.info("Published discovery config for %s", energy_type)
 
     # Extra sensor: date of last portal update
-    client.publish(
+    _publish_mqtt(
+        client,
         _discovery_topic("last_update"),
         json.dumps(
             {
@@ -131,11 +188,11 @@ def _publish_discovery(client: mqtt.Client, energy_types: list[str]) -> None:
                 "device": _DEVICE_INFO,
             }
         ),
-        retain=True,
     )
     _LOGGER.info("Published discovery config for Letztes Update")
 
-    client.publish(
+    _publish_mqtt(
+        client,
         _discovery_topic("last_portal_query"),
         json.dumps(
             {
@@ -147,11 +204,11 @@ def _publish_discovery(client: mqtt.Client, energy_types: list[str]) -> None:
                 "device": _DEVICE_INFO,
             }
         ),
-        retain=True,
     )
     _LOGGER.info("Published discovery config for Letzte Portal-Abfrage")
 
-    client.publish(
+    _publish_mqtt(
+        client,
         _discovery_topic("next_portal_query"),
         json.dumps(
             {
@@ -163,7 +220,6 @@ def _publish_discovery(client: mqtt.Client, energy_types: list[str]) -> None:
                 "device": _DEVICE_INFO,
             }
         ),
-        retain=True,
     )
     _LOGGER.info("Published discovery config for Naechste Portal-Abfrage")
     _LOGGER.info("Discovery publish done")
@@ -177,15 +233,13 @@ def _publish_state(client: mqtt.Client, data: dict, energy_types: list[str]) -> 
         if value is None:
             continue
         slug = energy_type.lower().replace(" ", "_")
-        client.publish(f"brunata_fetcher/sensor/{slug}/state", str(value), retain=True)
+        _publish_mqtt(client, f"brunata_fetcher/sensor/{slug}/state", str(value))
         _LOGGER.info("State: %s = %s", energy_type, value)
         _LOGGER.debug("State topic published: brunata_fetcher/sensor/%s/state", slug)
 
     last_update = data.get("last_update_date")
     if last_update:
-        client.publish(
-            "brunata_fetcher/sensor/last_update/state", last_update, retain=True
-        )
+        _publish_mqtt(client, "brunata_fetcher/sensor/last_update/state", last_update)
         _LOGGER.info("State: last_update_date = %s", last_update)
     _LOGGER.info("State publish done")
 
@@ -197,16 +251,8 @@ def _publish_schedule_state(
     last_iso = last_run.isoformat()
     next_iso = next_run.isoformat()
 
-    client.publish(
-        "brunata_fetcher/sensor/last_portal_query/state",
-        last_iso,
-        retain=True,
-    )
-    client.publish(
-        "brunata_fetcher/sensor/next_portal_query/state",
-        next_iso,
-        retain=True,
-    )
+    _publish_mqtt(client, "brunata_fetcher/sensor/last_portal_query/state", last_iso)
+    _publish_mqtt(client, "brunata_fetcher/sensor/next_portal_query/state", next_iso)
     _LOGGER.info("State: last_portal_query = %s", last_iso)
     _LOGGER.info("State: next_portal_query = %s", next_iso)
 
@@ -221,7 +267,7 @@ async def _run_scrape(options: dict) -> dict | None:
     config = {
         "email": options["email"],
         "password": options["password"],
-        "energy_types": options["energy_types"],
+        "energy_types": _normalize_energy_types(options.get("energy_types")),
         "login_url": _BRUNATA_LOGIN_URL,
         "selector_email": _SELECTOR_EMAIL,
         "selector_password": _SELECTOR_PASSWORD,
@@ -272,7 +318,7 @@ async def main() -> None:
         options = json.load(fh)
     _LOGGER.info("Options loaded successfully")
 
-    energy_types: list[str] = options["energy_types"]
+    energy_types: list[str] = _normalize_energy_types(options.get("energy_types"))
     scan_interval: int = int(options.get("scan_interval_hours", 24)) * 3600
 
     _LOGGER.info(
@@ -289,6 +335,7 @@ async def main() -> None:
     )
 
     _publish_discovery(mqtt_client, energy_types)
+    _clear_removed_energy_type_entities(mqtt_client, energy_types)
 
     cycle = 0
     while True:

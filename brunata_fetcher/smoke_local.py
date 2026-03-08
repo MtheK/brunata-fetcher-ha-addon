@@ -16,7 +16,12 @@ import json
 from datetime import UTC, datetime, timedelta
 
 from _brunata_scraper import _parse_german_number
-from server import _publish_discovery, _publish_schedule_state, _publish_state
+from server import (
+    _clear_removed_energy_type_entities,
+    _publish_discovery,
+    _publish_schedule_state,
+    _publish_state,
+)
 
 
 class CapturingMqttClient:
@@ -25,9 +30,24 @@ class CapturingMqttClient:
     def __init__(self) -> None:
         self.published: list[tuple[str, str, bool]] = []
 
-    def publish(self, topic: str, payload: str, retain: bool = False) -> None:
+    class _Info:
+        def __init__(self) -> None:
+            self.rc = 0
+
+        def wait_for_publish(self) -> None:
+            return
+
+    def publish(
+        self,
+        topic: str,
+        payload: str,
+        qos: int = 0,
+        retain: bool = False,
+    ) -> _Info:
         """Capture publish calls in-memory."""
+        _ = qos
         self.published.append((topic, payload, retain))
+        return self._Info()
 
 
 def _assert_parser() -> None:
@@ -50,6 +70,7 @@ def _assert_discovery_and_state() -> None:
 
     energy_types = ["Heizung", "Kaltwasser"]
     _publish_discovery(client, energy_types)
+    _clear_removed_energy_type_entities(client, energy_types)
     _publish_state(
         client,
         {
@@ -69,11 +90,13 @@ def _assert_discovery_and_state() -> None:
     expected_topics = {
         "homeassistant/sensor/brunata_fetcher/heizung/config",
         "homeassistant/sensor/brunata_fetcher/kaltwasser/config",
+        "homeassistant/sensor/brunata_fetcher/warmwasser/config",
         "homeassistant/sensor/brunata_fetcher/last_update/config",
         "homeassistant/sensor/brunata_fetcher/last_portal_query/config",
         "homeassistant/sensor/brunata_fetcher/next_portal_query/config",
         "brunata_fetcher/sensor/heizung/state",
         "brunata_fetcher/sensor/kaltwasser/state",
+        "brunata_fetcher/sensor/warmwasser/state",
         "brunata_fetcher/sensor/last_update/state",
         "brunata_fetcher/sensor/last_portal_query/state",
         "brunata_fetcher/sensor/next_portal_query/state",

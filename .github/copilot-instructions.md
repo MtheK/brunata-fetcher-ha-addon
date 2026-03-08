@@ -77,6 +77,7 @@ Defaults are defined in `brunata_fetcher/config.yaml`.
 - Do not move Playwright installation to runtime if avoidable; keep it container-build based
 - Preserve MQTT Discovery topic stability to avoid entity churn in HA
 - Keep ASCII by default in code/comments unless file already uses Unicode
+- Always update `brunata_fetcher/CHANGELOG.md` for user-visible behavior changes and every version bump
 
 ## First test checklist (baseline)
 
