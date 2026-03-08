@@ -1,7 +1,5 @@
 # Changelog
 
-## Unreleased
-
 ## 0.2.0
 
 - Added Supervisor MQTT service discovery with fallback to manual/default settings
