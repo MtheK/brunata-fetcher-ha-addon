@@ -25,8 +25,8 @@ Keywords: Brunata München Nutzerportal, BRUdirekt, BRUNATA-METRONA
 1. Add this repository in Home Assistant Add-on Store.
 2. Install `Brunata Fetcher`.
 3. Configure required options (`email`, `password`).
-4. Start the add-on.
-5. Verify entities appear in Home Assistant.
+4. Start the add-on and check log (fetch duration ~20s).
+5. Verify entities appear in Home Assistant (MQTT: BRUdirekt).
 
 ## Configuration
 
@@ -86,6 +86,27 @@ If validation fails, the query is treated as failed.
 - If no entities appear, confirm MQTT integration is enabled in Home Assistant.
 - If portal fails repeatedly, check credentials and whether Brunata selectors
   still match the current portal UI.
+
+## Related projects and portal compatibility
+
+These projects are useful references, but they target different portal stacks.
+
+1. `Minol-MQTT-Bridge`:
+  https://github.com/Gr4ph1xZ/Minol-MQTT-Bridge
+  Portal: `https://minolauth.b2clogin.com/` (Brunata Minol)
+2. `hacs-brunata`:
+  https://codeberg.org/YukiElectronics/hacs-brunata
+  Portals: `https://online.brunata.com/`,
+  `https://brunatab2cprod.b2clogin.com/`
+3. `brunata-to-home-assistant`:
+  https://github.com/patricklind/brunata-to-home-assistant
+  Portals: same as #2 (`online.brunata.com`, `brunatab2cprod.b2clogin.com`)
+
+Important compatibility note:
+
+- This add-on targets the Brunata Muenchen Nutzerportal / BRUdirekt login flow.
+- My BRUdirekt credentials for the Brunata Muenchen portal did not work with
+  the other portal stacks listed above.
 
 ## Development notes
 
