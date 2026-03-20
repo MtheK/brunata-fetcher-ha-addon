@@ -55,7 +55,7 @@ async def scrape(config: dict) -> dict:
     timeout_after = config.get("timeout_after_login", 2000)
     timeout_clicks = config.get("timeout_between_clicks", 2000)
     pw_timeout = config.get("playwright_timeout", 30000)
-    headless = config.get("headless", True)
+    headless = config.get("headless", False)
     energy_type_labels = config.get("energy_type_labels", {})
     masked_email = f"***{email[-4:]}" if len(email) >= 4 else "***"
     _LOGGER.info(
@@ -85,7 +85,9 @@ async def scrape(config: dict) -> dict:
             headless=headless, args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
         _LOGGER.info("Browser launched")
-        context = await browser.new_context()
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         page = await context.new_page()
         page.set_default_timeout(pw_timeout)
         try:
@@ -101,14 +103,19 @@ async def scrape(config: dict) -> dict:
                 _LOGGER.warning("Failed to write portal_debug1.html: %s", ex)
             await page.wait_for_selector(sel_email, timeout=30000)
             _LOGGER.info("Login page loaded")
-            # Dump HTML for debugging
+            # Dump HTML and screenshot for debugging
             try:
                 html = await page.content()
                 with open("/tmp/portal_debug2.html", "w", encoding="utf-8") as f:
                     f.write(html)
-                _LOGGER.info("Wrote portal_debug2.html for troubleshooting")
+                await page.screenshot(path="/tmp/portal_debug2.png")
+                _LOGGER.info(
+                    "Wrote portal_debug2.html and portal_debug2.png for troubleshooting"
+                )
             except Exception as ex:
-                _LOGGER.warning("Failed to write portal_debug2.html: %s", ex)
+                _LOGGER.warning(
+                    "Failed to write portal_debug2.html or screenshot: %s", ex
+                )
             await page.wait_for_timeout(timeout_before)
             await page.fill(sel_email, email)
             await page.fill(sel_password, password)
