@@ -91,16 +91,24 @@ async def scrape(config: dict) -> dict:
         try:
             _LOGGER.info("Open login page")
             await page.goto(login_url, wait_until="domcontentloaded")
+            # Dump HTML for debugging
+            try:
+                html = await page.content()
+                with open("/tmp/portal_debug1.html", "w", encoding="utf-8") as f:
+                    f.write(html)
+                _LOGGER.info("Wrote portal_debug1.html for troubleshooting")
+            except Exception as ex:
+                _LOGGER.warning("Failed to write portal_debug1.html: %s", ex)
             await page.wait_for_selector(sel_email, timeout=30000)
             _LOGGER.info("Login page loaded")
             # Dump HTML for debugging
             try:
                 html = await page.content()
-                with open("/tmp/portal_debug.html", "w", encoding="utf-8") as f:
+                with open("/tmp/portal_debug2.html", "w", encoding="utf-8") as f:
                     f.write(html)
-                _LOGGER.info("Wrote portal_debug.html for troubleshooting")
+                _LOGGER.info("Wrote portal_debug2.html for troubleshooting")
             except Exception as ex:
-                _LOGGER.warning("Failed to write portal_debug.html: %s", ex)
+                _LOGGER.warning("Failed to write portal_debug2.html: %s", ex)
             await page.wait_for_timeout(timeout_before)
             await page.fill(sel_email, email)
             await page.fill(sel_password, password)
