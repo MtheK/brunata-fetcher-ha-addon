@@ -55,7 +55,7 @@ async def scrape(config: dict) -> dict:
     timeout_after = config.get("timeout_after_login", 2000)
     timeout_clicks = config.get("timeout_between_clicks", 2000)
     pw_timeout = config.get("playwright_timeout", 30000)
-    headless = config.get("headless", False)
+    headless = config.get("headless", True)
     energy_type_labels = config.get("energy_type_labels", {})
     masked_email = f"***{email[-4:]}" if len(email) >= 4 else "***"
     _LOGGER.info(
@@ -82,7 +82,40 @@ async def scrape(config: dict) -> dict:
         _LOGGER.info("Playwright start")
         # browser = await pw.chromium.launch(headless=headless)
         browser = await pw.chromium.launch(
-            headless=headless, args=["--no-sandbox", "--disable-dev-shm-usage"]
+            headless=headless,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--disable-accelerated-2d-canvas",
+                "--disable-accelerated-video-decode",
+                "--disable-accelerated-mjpeg-decode",
+                "--disable-accelerated-video-encode",
+                "--disable-extensions",
+                "--disable-background-timer-throttling",
+                "--disable-renderer-backgrounding",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-breakpad",
+                "--disable-client-side-phishing-detection",
+                "--disable-component-update",
+                "--disable-default-apps",
+                "--disable-features=site-per-process",
+                "--disable-hang-monitor",
+                "--disable-infobars",
+                "--disable-popup-blocking",
+                "--disable-prompt-on-repost",
+                "--disable-sync",
+                "--metrics-recording-only",
+                "--mute-audio",
+                "--no-first-run",
+                "--safebrowsing-disable-auto-update",
+                "--enable-automation",
+                "--password-store=basic",
+                "--use-mock-keychain",
+                "--single-process",
+                "--disable-blink-features=AutomationControlled",
+            ],
         )
         _LOGGER.info("Browser launched")
         context = await browser.new_context(
