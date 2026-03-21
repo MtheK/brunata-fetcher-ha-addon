@@ -52,8 +52,8 @@ async def scrape(config: dict) -> dict:
     sel_date = config["selector_date"]
     sel_value = config["selector_value"]
     timeout_before = config.get("timeout_before_login", 1000)
-    timeout_after = config.get("timeout_after_login", 2000)
-    timeout_clicks = config.get("timeout_between_clicks", 2000)
+    timeout_after = config.get("timeout_after_login", 5000)
+    timeout_clicks = config.get("timeout_between_clicks", 5000)
     pw_timeout = config.get("playwright_timeout", 30000)
     headless = config.get("headless", True)
     energy_type_labels = config.get("energy_type_labels", {})
@@ -66,32 +66,123 @@ async def scrape(config: dict) -> dict:
         pw_timeout,
     )
 
+    # Delete Playwright browser user data directory for a clean session
+    import shutil
+    from pathlib import Path
+
+    user_data_dir = Path("/tmp/playwright_user_data")
+    if user_data_dir.exists():
+        try:
+            shutil.rmtree(user_data_dir)
+            _LOGGER.info("Deleted browser user data directory: %s", user_data_dir)
+        except Exception as ex:
+            _LOGGER.warning("Failed to delete browser user data directory: %s", ex)
+
     async with async_playwright() as pw:
         _LOGGER.info("Playwright start")
-        browser = await pw.chromium.launch(headless=headless)
+        # browser = await pw.chromium.launch(headless=headless)
+        browser = await pw.chromium.launch(
+            headless=headless,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--disable-accelerated-2d-canvas",
+                "--disable-accelerated-video-decode",
+                "--disable-accelerated-mjpeg-decode",
+                "--disable-accelerated-video-encode",
+                "--disable-extensions",
+                "--disable-background-timer-throttling",
+                "--disable-renderer-backgrounding",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-breakpad",
+                "--disable-client-side-phishing-detection",
+                "--disable-component-update",
+                "--disable-default-apps",
+                "--disable-features=site-per-process",
+                "--disable-hang-monitor",
+                "--disable-infobars",
+                "--disable-popup-blocking",
+                "--disable-prompt-on-repost",
+                "--disable-sync",
+                "--metrics-recording-only",
+                "--mute-audio",
+                "--no-first-run",
+                "--safebrowsing-disable-auto-update",
+                "--enable-automation",
+                "--password-store=basic",
+                "--use-mock-keychain",
+                "--single-process",
+                "--disable-blink-features=AutomationControlled",
+            ],
+        )
         _LOGGER.info("Browser launched")
-        context = await browser.new_context()
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         page = await context.new_page()
         page.set_default_timeout(pw_timeout)
         try:
             _LOGGER.info("Open login page")
-            await page.goto(login_url, wait_until="networkidle")
-            _LOGGER.info("Login page loaded")
+            await page.goto(login_url, wait_until="domcontentloaded")
+            # Dump HTML for debugging
+            try:
+                html = await page.content()
+                with open("/tmp/portal_debug1.html", "w", encoding="utf-8") as f:
+                    f.write(html)
+                _LOGGER.info("Wrote portal_debug1.html for troubleshooting")
+            except Exception as ex:
+                _LOGGER.warning("Failed to write portal_debug1.html: %s", ex)
+
+            # Warte auf Email-Feld sichtbar
+            await page.wait_for_selector(sel_email, timeout=30000)
+            _LOGGER.info("Login page loaded and email selector found")
+
+            # Dump HTML und Screenshot für Debugging
+            try:
+                html = await page.content()
+                with open("/tmp/portal_debug2.html", "w", encoding="utf-8") as f:
+                    f.write(html)
+                await page.screenshot(path="/tmp/portal_debug2.png")
+                _LOGGER.info(
+                    "Wrote portal_debug2.html and portal_debug2.png for troubleshooting"
+                )
+            except Exception as ex:
+                _LOGGER.warning(
+                    "Failed to write portal_debug2.html or screenshot: %s", ex
+                )
+
+            # Email-Feld
+            await page.wait_for_selector(sel_email, timeout=30000)
             await page.wait_for_timeout(timeout_before)
             await page.fill(sel_email, email)
+
+            # Passwort-Feld
+            await page.wait_for_selector(sel_password, timeout=30000)
+            await page.wait_for_timeout(timeout_before)
             await page.fill(sel_password, password)
+
             _LOGGER.info("Credentials filled")
+            await page.screenshot(path="/tmp/portal_debug3.png")
+            _LOGGER.info("Wrote portal_debug3.png for troubleshooting")
+
+            # Login-Button
+            await page.wait_for_selector(sel_login, timeout=30000)
             await page.wait_for_timeout(timeout_before)
             await page.click(sel_login)
             _LOGGER.info("Login button clicked")
             try:
-                await page.wait_for_load_state("networkidle")
+                await page.wait_for_load_state("domcontentloaded")
             except Exception:
                 _LOGGER.warning(
                     "wait_for_load_state(networkidle) timed out after login click"
                 )
             await page.wait_for_timeout(500)
             _LOGGER.info("Post-login wait complete")
+
+            await page.screenshot(path="/tmp/portal_debug4.png")
+            _LOGGER.info("Wrote portal_debug4.png for troubleshooting")
 
             # Detect login failure
             page_text = await page.text_content("body") or ""
@@ -107,6 +198,9 @@ async def scrape(config: dict) -> dict:
 
             await page.wait_for_timeout(timeout_after)
             _LOGGER.info("After-login settle wait complete")
+
+            await page.screenshot(path="/tmp/portal_debug5.png")
+            _LOGGER.info("Wrote portal_debug5.png for troubleshooting")
 
             consumption: dict = {"last_update_date": None}
             await page.wait_for_timeout(timeout_clicks)
@@ -124,6 +218,8 @@ async def scrape(config: dict) -> dict:
                         _LOGGER.debug(
                             "Trying selector for %s: %s", energy_type, btn_sel
                         )
+                        await page.wait_for_selector(btn_sel, timeout=30000)
+                        await page.wait_for_timeout(timeout_clicks)
                         await page.click(btn_sel, timeout=5000)
                         clicked = True
                         _LOGGER.info(
@@ -132,9 +228,7 @@ async def scrape(config: dict) -> dict:
                         break
                     except Exception:
                         _LOGGER.debug(
-                            "Selector click failed for %s: %s",
-                            energy_type,
-                            btn_sel,
+                            "Selector click failed for %s: %s", energy_type, btn_sel
                         )
                         continue
 
@@ -145,6 +239,7 @@ async def scrape(config: dict) -> dict:
                     consumption[energy_type] = None
                     continue
 
+                await page.wait_for_selector(sel_date, timeout=30000)
                 await page.wait_for_timeout(timeout_clicks)
                 _LOGGER.info("Post-click wait complete for %s", energy_type)
 
@@ -156,6 +251,7 @@ async def scrape(config: dict) -> dict:
                             consumption["last_update_date"] = candidate
                             _LOGGER.info("Detected last_update_date=%s", candidate)
 
+                await page.wait_for_selector(sel_value, timeout=30000)
                 value_text = await page.text_content(sel_value)
                 if not value_text:
                     _LOGGER.warning("No value text found for %s", energy_type)

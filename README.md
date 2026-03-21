@@ -113,6 +113,10 @@ Important compatibility note:
 - Runtime behavior is implemented in `brunata_fetcher/server.py`.
 - Scraping logic is in `brunata_fetcher/_brunata_scraper.py`.
 - Local smoke checks: `python3 brunata_fetcher/smoke_local.py`
+- Local one-shot scraper run with `.env` credentials:
+  - `cp brunata_fetcher/.env.example brunata_fetcher/.env`
+  - Edit `brunata_fetcher/.env` and set `BRUNATA_EMAIL` and `BRUNATA_PASSWORD`
+  - Run: `cd brunata_fetcher && python3 run_scraper_once.py --env-file .env`
 - Release history: `brunata_fetcher/CHANGELOG.md`
 - Session handover and archived context:
   - `docs/SESSION_HANDOVER.md`
