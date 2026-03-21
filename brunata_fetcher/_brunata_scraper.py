@@ -101,8 +101,10 @@ async def scrape(config: dict) -> dict:
                 _LOGGER.info("Wrote portal_debug1.html for troubleshooting")
             except Exception as ex:
                 _LOGGER.warning("Failed to write portal_debug1.html: %s", ex)
+
             await page.wait_for_selector(sel_email, timeout=30000)
-            _LOGGER.info("Login page loaded")
+            _LOGGER.info("Login page loaded and email selector found")
+
             # Dump HTML and screenshot for debugging
             try:
                 html = await page.content()
@@ -116,10 +118,15 @@ async def scrape(config: dict) -> dict:
                 _LOGGER.warning(
                     "Failed to write portal_debug2.html or screenshot: %s", ex
                 )
+
             await page.wait_for_timeout(timeout_before)
             await page.fill(sel_email, email)
             await page.fill(sel_password, password)
+
             _LOGGER.info("Credentials filled")
+            await page.screenshot(path="/tmp/portal_debug3.png")
+            _LOGGER.info("Wrote portal_debug3.png for troubleshooting")
+
             await page.wait_for_timeout(timeout_before)
             await page.click(sel_login)
             _LOGGER.info("Login button clicked")
@@ -131,6 +138,9 @@ async def scrape(config: dict) -> dict:
                 )
             await page.wait_for_timeout(500)
             _LOGGER.info("Post-login wait complete")
+
+            await page.screenshot(path="/tmp/portal_debug4.png")
+            _LOGGER.info("Wrote portal_debug4.png for troubleshooting")
 
             # Detect login failure
             page_text = await page.text_content("body") or ""
@@ -146,6 +156,9 @@ async def scrape(config: dict) -> dict:
 
             await page.wait_for_timeout(timeout_after)
             _LOGGER.info("After-login settle wait complete")
+
+            await page.screenshot(path="/tmp/portal_debug5.png")
+            _LOGGER.info("Wrote portal_debug5.png for troubleshooting")
 
             consumption: dict = {"last_update_date": None}
             await page.wait_for_timeout(timeout_clicks)
